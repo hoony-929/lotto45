@@ -469,6 +469,67 @@ button {
     text-align: center;
 }
 
+@media (min-width: 1400px) {
+    .layout {
+        gap: 12px;
+        grid-template-columns: minmax(0, 1.58fr) minmax(400px, 0.9fr);
+    }
+
+    .generator,
+    .panel {
+        padding: 14px;
+    }
+
+    .panel-head {
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+    }
+
+    .panel-head h2 {
+        font-size: 0.9rem;
+    }
+
+    .panel-head span {
+        font-size: 0.74rem;
+    }
+
+    .list {
+        gap: 6px;
+    }
+
+    .history-item,
+    .rank-item,
+    .placeholder {
+        padding: 8px 10px;
+        border-radius: 12px;
+    }
+
+    .history-meta {
+        font-size: 0.68rem;
+        margin-bottom: 5px;
+    }
+
+    .history-balls {
+        gap: 3px;
+    }
+
+    .mini-ball,
+    .rank-ball {
+        width: 22px;
+        height: 22px;
+        font-size: 0.64rem;
+    }
+
+    .rank-badge {
+        width: 18px;
+        height: 18px;
+        font-size: 0.62rem;
+    }
+
+    .rank-count {
+        font-size: 0.72rem;
+    }
+}
 @media (max-width: 1320px) {
     .page {
         width: min(1280px, calc(100% - 24px));
@@ -595,3 +656,5 @@ button {
         width: 100%;
     }
 }
+
+
