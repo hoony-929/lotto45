@@ -1,6 +1,6 @@
 ﻿const STORAGE_KEY = 'lottoStatePremiumV2';
-const STATS_CACHE_PREFIX = 'lottoStatsCache';
-const DRAW_API_BASE = 'https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=';
+const DATA_CACHE_KEY = 'lottoHistoryCacheV1';
+const DATA_SOURCE_URL = 'https://smok95.github.io/lotto/results/all.json';
 const INITIAL_ROWS = Array.from({ length: 5 }, () => ({ numbers: [], type: '' }));
 const typeLabelMap = { manual: '수동', semi: '반자동', auto: '자동' };
 
@@ -22,17 +22,6 @@ function cloneRows(rows) {
         numbers: Array.isArray(row.numbers) ? row.numbers.filter(validNumber).sort((a, b) => a - b) : [],
         type: typeof row.type === 'string' ? row.type : ''
     }));
-}
-
-function createNetworkError(message, cause) {
-    const error = new Error(message);
-    error.code = 'NETWORK';
-    error.cause = cause;
-    return error;
-}
-
-function isNetworkError(error) {
-    return error && error.code === 'NETWORK';
 }
 
 function loadState() {
@@ -292,46 +281,50 @@ function clearAllRows() {
     setStatus('모든 줄과 제외 번호를 초기화했습니다.');
 }
 
-async function fetchDraw(round) {
-    let response;
-
-    try {
-        response = await fetch(`${DRAW_API_BASE}${round}`);
-    } catch (error) {
-        throw createNetworkError('동행복권 API 연결에 실패했습니다.', error);
+async function fetchHistoryData() {
+    const cached = loadHistoryCache();
+    if (cached) {
+        return cached;
     }
 
+    const response = await fetch(DATA_SOURCE_URL, { cache: 'no-store' });
     if (!response.ok) {
-        throw new Error(`회차 ${round} 데이터를 불러오지 못했습니다.`);
+        throw new Error('로또 데이터 소스를 불러오지 못했습니다.');
     }
 
-    const data = await response.json();
-    if (data.returnValue !== 'success') {
-        throw new Error(`회차 ${round} 데이터가 존재하지 않습니다.`);
+    const rawData = await response.json();
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+        throw new Error('로또 데이터 형식이 올바르지 않습니다.');
     }
-    return data;
+
+    const normalized = rawData
+        .map((draw) => ({
+            drwNo: draw.draw_no,
+            drwNoDate: typeof draw.date === 'string' ? draw.date.slice(0, 10) : '',
+            numbers: Array.isArray(draw.numbers) ? [...draw.numbers].sort((a, b) => a - b) : [],
+            bnusNo: draw.bonus_no
+        }))
+        .filter((draw) => Number.isInteger(draw.drwNo) && draw.numbers.length === 6 && validNumber(draw.bnusNo))
+        .sort((a, b) => a.drwNo - b.drwNo);
+
+    saveHistoryCache(normalized);
+    return normalized;
 }
 
-function estimateLatestRound() {
-    const firstDrawDate = new Date('2002-12-07T21:00:00+09:00');
-    const diffDays = Math.floor((Date.now() - firstDrawDate.getTime()) / (1000 * 60 * 60 * 24));
-    return Math.floor(diffDays / 7) + 2;
+function loadHistoryCache() {
+    try {
+        const cached = localStorage.getItem(DATA_CACHE_KEY);
+        if (!cached) return null;
+
+        const parsed = JSON.parse(cached);
+        return Array.isArray(parsed) ? parsed : null;
+    } catch (error) {
+        return null;
+    }
 }
 
-async function resolveLatestRound() {
-    let guess = estimateLatestRound();
-    while (guess > 0) {
-        try {
-            const draw = await fetchDraw(guess);
-            return { round: guess, draw };
-        } catch (error) {
-            if (isNetworkError(error)) {
-                throw error;
-            }
-            guess -= 1;
-        }
-    }
-    throw new Error('최신 회차를 찾지 못했습니다.');
+function saveHistoryCache(data) {
+    localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(data));
 }
 
 function renderHistory(draws) {
@@ -341,7 +334,6 @@ function renderHistory(draws) {
     meta.textContent = `최신 ${draws.length}회차`;
 
     draws.forEach((draw) => {
-        const numbers = [draw.drwtNo1, draw.drwtNo2, draw.drwtNo3, draw.drwtNo4, draw.drwtNo5, draw.drwtNo6];
         const article = document.createElement('article');
         article.className = 'history-item';
         article.innerHTML = `
@@ -350,29 +342,13 @@ function renderHistory(draws) {
                 <span>${draw.drwNoDate}</span>
             </div>
             <div class="history-balls">
-                ${numbers.map((number) => `<span class="mini-ball">${number}</span>`).join('')}
+                ${draw.numbers.map((number) => `<span class="mini-ball">${number}</span>`).join('')}
                 <span class="plus">+</span>
                 <span class="mini-ball bonus">${draw.bnusNo}</span>
             </div>
         `;
         list.appendChild(article);
     });
-}
-
-function loadStatsCache(round) {
-    try {
-        const cached = localStorage.getItem(`${STATS_CACHE_PREFIX}:${round}`);
-        if (!cached) return null;
-
-        const parsed = JSON.parse(cached);
-        return Array.isArray(parsed.rankings) ? parsed.rankings : null;
-    } catch (error) {
-        return null;
-    }
-}
-
-function saveStatsCache(round, rankings) {
-    localStorage.setItem(`${STATS_CACHE_PREFIX}:${round}`, JSON.stringify({ rankings }));
 }
 
 function renderRankings(rankings, totalRounds) {
@@ -395,21 +371,14 @@ function renderRankings(rankings, totalRounds) {
     });
 }
 
-async function calculateTopNumbers(maxRound) {
+function calculateTopNumbers(draws) {
     const counts = Array.from({ length: 46 }, () => 0);
-    const rounds = Array.from({ length: maxRound }, (_, index) => index + 1);
-    const chunkSize = 20;
 
-    for (let i = 0; i < rounds.length; i += chunkSize) {
-        const chunk = rounds.slice(i, i + chunkSize);
-        const draws = await Promise.all(chunk.map((round) => fetchDraw(round)));
-
-        draws.forEach((draw) => {
-            [draw.drwtNo1, draw.drwtNo2, draw.drwtNo3, draw.drwtNo4, draw.drwtNo5, draw.drwtNo6].forEach((number) => {
-                counts[number] += 1;
-            });
+    draws.forEach((draw) => {
+        draw.numbers.forEach((number) => {
+            counts[number] += 1;
         });
-    }
+    });
 
     return counts
         .map((count, number) => ({ number, count }))
@@ -420,34 +389,21 @@ async function calculateTopNumbers(maxRound) {
 
 async function fetchRecentHistoryAndStats() {
     try {
-        const latest = await resolveLatestRound();
-        const latestRound = latest.round;
-        const recentPromises = [];
+        const allDraws = await fetchHistoryData();
+        const recentDraws = [...allDraws].slice(-10).reverse();
+        const rankings = calculateTopNumbers(allDraws);
+        const latestRound = allDraws[allDraws.length - 1].drwNo;
 
-        for (let round = latestRound; round > latestRound - 10 && round > 0; round -= 1) {
-            recentPromises.push(fetchDraw(round));
-        }
-
-        const recentDraws = await Promise.all(recentPromises);
         renderHistory(recentDraws);
-        setStatus(`${latestRound}회차 기준 최근 당첨 내역을 반영했습니다.`);
-
-        const cachedRankings = loadStatsCache(latestRound);
-        if (cachedRankings) {
-            renderRankings(cachedRankings, latestRound);
-            return;
-        }
-
-        const rankings = await calculateTopNumbers(latestRound);
-        saveStatsCache(latestRound, rankings);
         renderRankings(rankings, latestRound);
+        setStatus(`${latestRound}회차 기준 최근 당첨 내역을 반영했습니다.`);
     } catch (error) {
         console.error(error);
         document.getElementById('historyList').innerHTML = '<div class="placeholder">당첨 내역을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.</div>';
-        document.getElementById('rankList').innerHTML = '<div class="placeholder">통계를 계산하지 못했습니다. 네트워크 상태를 확인해주세요.</div>';
+        document.getElementById('rankList').innerHTML = '<div class="placeholder">통계를 계산하지 못했습니다. 데이터 소스 상태를 확인해주세요.</div>';
         document.getElementById('historyMeta').textContent = '불러오기 실패';
         document.getElementById('rankMeta').textContent = '계산 실패';
-        setStatus(isNetworkError(error) ? '동행복권 API 인증서 또는 네트워크 문제로 연결하지 못했습니다.' : '외부 API 연결에 실패했습니다. 다시 시도해주세요.');
+        setStatus('대체 로또 데이터 소스 연결에 실패했습니다.');
     }
 }
 
