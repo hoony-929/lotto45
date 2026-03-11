@@ -1,5 +1,5 @@
 ﻿const STORAGE_KEY = 'lottoStatePremiumV2';
-const DATA_CACHE_KEY = 'lottoHistoryCacheV1';
+const DATA_CACHE_KEY = 'lottoHistoryCacheV2';
 const DATA_SOURCE_URL = 'https://smok95.github.io/lotto/results/all.json';
 const INITIAL_ROWS = Array.from({ length: 5 }, () => ({ numbers: [], type: '' }));
 const typeLabelMap = { manual: '수동', semi: '반자동', auto: '자동' };
@@ -232,14 +232,27 @@ function buildTargetRow(index, replaceAll = false) {
 }
 
 async function applyRowResult(index, finalNumbers, rowType) {
-    isAnimating = true;
-    updateAllUI();
-    state.rowsData[index] = { numbers: finalNumbers, type: rowType };
-    isAnimating = false;
+    state.rowsData[index].type = rowType;
+    const slots = document.getElementById(`slots-${index}`).children;
+    const currentNumbers = state.rowsData[index].numbers;
+
+    for (let i = 0; i < 6; i++) {
+        if (currentNumbers[i] !== finalNumbers[i]) {
+            slots[i].classList.add('animating');
+            slots[i].textContent = finalNumbers[i] ?? '';
+            await new Promise(resolve => setTimeout(resolve, 80));
+            slots[i].classList.remove('animating');
+            slots[i].classList.add('filled');
+        }
+    }
+
+    state.rowsData[index].numbers = finalNumbers;
     updateAllUI();
 }
 
 async function handleAutoClick(index) {
+    if (isAnimating) return;
+
     try {
         const row = state.rowsData[index];
         if (row.numbers.length === 6) {
@@ -247,27 +260,41 @@ async function handleAutoClick(index) {
             return;
         }
 
+        isAnimating = true;
+        updateAllUI();
+
         const targetNumbers = buildTargetRow(index, false);
         const nextType = row.numbers.length > 0 ? 'semi' : 'auto';
         await applyRowResult(index, targetNumbers, nextType);
         setStatus(`${index + 1}줄 자동 생성이 완료되었습니다.`);
     } catch (error) {
         alert(error.message);
+    } finally {
+        isAnimating = false;
+        updateAllUI();
     }
 }
 
 async function handleAutoAllClick() {
+    if (isAnimating) return;
+
     try {
+        isAnimating = true;
+        updateAllUI();
+
         for (let index = 0; index < state.rowsData.length; index += 1) {
             const row = state.rowsData[index];
             const replaceAll = row.numbers.length === 6 && row.type !== 'manual';
             const targetNumbers = buildTargetRow(index, replaceAll);
-            const nextType = row.numbers.length > 0 && !replaceAll ? 'semi' : 'auto';
+            const nextType = row.numbers.length > 0 && !replaceAll ? (row.numbers.length === 6 && row.type === 'manual' ? 'manual' : 'semi') : 'auto';
             await applyRowResult(index, targetNumbers, nextType);
         }
         setStatus('전체 랜덤 5줄 생성이 완료되었습니다.');
     } catch (error) {
         alert(error.message);
+    } finally {
+        isAnimating = false;
+        updateAllUI();
     }
 }
 
@@ -317,14 +344,26 @@ function loadHistoryCache() {
         if (!cached) return null;
 
         const parsed = JSON.parse(cached);
-        return Array.isArray(parsed) ? parsed : null;
+        if (!parsed || !parsed.timestamp || !Array.isArray(parsed.data)) return null;
+
+        const now = Date.now();
+        const age = now - parsed.timestamp;
+        const twelveHours = 12 * 60 * 60 * 1000;
+
+        if (age > twelveHours) return null;
+
+        return parsed.data;
     } catch (error) {
         return null;
     }
 }
 
 function saveHistoryCache(data) {
-    localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(data));
+    const payload = {
+        timestamp: Date.now(),
+        data: data
+    };
+    localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(payload));
 }
 
 function renderHistory(draws) {
